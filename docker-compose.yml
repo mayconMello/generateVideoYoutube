@@ -1,0 +1,17 @@
+services:
+  editly-api:
+    build:
+      context: ./editly_service
+    image: editly-api:latest
+    container_name: editly-api
+    environment:
+      - PORT=3000
+      - EDITLY_MOUNT_ROOT=/work
+    ports:
+      - "3535:3000"
+    volumes:
+      - ./:/work
+    command: ["node", "/app/server.js"]
+    working_dir: /work
+    user: "${UID:-1000}:${GID:-1000}"
+    restart: unless-stopped
