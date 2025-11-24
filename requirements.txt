@@ -13,3 +13,5 @@ pytesseract==0.3.10
 pydantic==2.12.4
 torch==2.8.0
 pexels-api==1.0.1
+runpod>=1.6.0
+websocket-client>=1.6.0

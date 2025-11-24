@@ -8,17 +8,13 @@ from PIL import Image
 
 from src.executor.providers.base import AcquisitionResult, AssetProvider, ProviderContext
 from src.executor.providers.stock import StockAssetProvider
-from src.media.generation import generate_image_with_qwen, generate_video_with_seedance
+from src.media.generation import generate_video_with_seedance
+from src.media.generation.runpod_flux import flux_client
 from src.media.generation.utils import GenerationSpec, resolve_generation_spec, safe_json
 from src.schemas.recipe import Asset
 
 
 class GeneratedAssetProvider(AssetProvider):
-    """
-    Asset provider responsible for invoking generative models (Qwen/Seedance).
-    When a video needs to be generated, it will attempt to source a keyframe image
-    using the same stock search policies before falling back to image generation.
-    """
 
     def __init__(self, *, reference_stock_provider: Optional[StockAssetProvider] = None) -> None:
         self.reference_stock_provider = reference_stock_provider
@@ -34,6 +30,7 @@ class GeneratedAssetProvider(AssetProvider):
         video_prompt = asset.video_generate_prompt or image_prompt
 
         if asset.type == "video":
+
             keyframe_path, reference_info = self._prepare_reference_frame(
                 ctx,
                 prompt=image_prompt,
@@ -78,45 +75,47 @@ class GeneratedAssetProvider(AssetProvider):
                 decision="generated",
             )
 
-        image_url, image_debug = generate_image_with_qwen(
-            image_prompt,
-            aspect_ratio=spec.aspect_ratio,
-            size=spec.image_size,
+        logger(f"[generated] scene={scene.index} asset={ctx.asset_index} generating via Flux (RunPod)...")
+
+        image_url, image_debug = flux_client.generate_image(
+            prompt=image_prompt,
             width=spec.width,
             height=spec.height,
         )
+
         if not image_url:
             raise RuntimeError(
-                f"Image generation failed; details={safe_json(image_debug)}"
+                f"Flux generation failed; details={safe_json(image_debug)}"
             )
+
         logger(
             f"[generated] scene={scene.index} asset={ctx.asset_index} image url={image_url}"
         )
+
         image_path = _download_to_assets(
             image_url,
             ctx.workdir,
             ctx.scene_index,
             ctx.asset_index,
-            suffix=".jpeg",
+            suffix=".png",
         )
+
         metrics = {"image_generation": image_debug, "image_url": image_url}
         return AcquisitionResult(
             path=image_path,
-            note="generated-image",
+            note="generated-image-flux",
             metrics=metrics,
             source_preference="generated",
             acquisition="generated",
             decision="generated",
         )
 
-    # ------------------------------------------------------------------ helpers
-
     def _prepare_reference_frame(
-        self,
-        ctx: ProviderContext,
-        *,
-        spec: GenerationSpec,
-        prompt: str,
+            self,
+            ctx: ProviderContext,
+            *,
+            spec: GenerationSpec,
+            prompt: str,
     ) -> Tuple[str, dict]:
         logger = ctx.logger or (lambda msg: None)
         asset = ctx.asset
@@ -159,18 +158,18 @@ class GeneratedAssetProvider(AssetProvider):
                 )
 
         logger(
-            f"[generated] scene={ctx.scene.index} asset={ctx.asset_index} generating keyframe"
+            f"[generated] scene={ctx.scene.index} asset={ctx.asset_index} generating keyframe via Flux"
         )
-        keyframe_url, keyframe_debug = generate_image_with_qwen(
-            prompt,
-            aspect_ratio=spec.aspect_ratio,
-            size=spec.image_size,
+
+        keyframe_url, keyframe_debug = flux_client.generate_image(
+            prompt=prompt,
             width=spec.width,
             height=spec.height,
         )
+
         if not keyframe_url:
             raise RuntimeError(
-                f"Seedance keyframe generation failed; details={safe_json(keyframe_debug)}"
+                f"Flux keyframe generation failed; details={safe_json(keyframe_debug)}"
             )
 
         keyframe_path = _download_to_assets(
@@ -178,7 +177,7 @@ class GeneratedAssetProvider(AssetProvider):
             ctx.workdir,
             ctx.scene_index,
             ctx.asset_index,
-            suffix=".jpeg",
+            suffix=".png",
         )
         return keyframe_path, {
             "mode": "generated",
@@ -197,10 +196,10 @@ def _as_image_asset(asset: Asset) -> Asset:
 
 
 def _copy_keyframe_to_assets(
-    source_path: str,
-    workdir: str,
-    scene_idx: int,
-    asset_idx: int,
+        source_path: str,
+        workdir: str,
+        scene_idx: int,
+        asset_idx: int,
 ) -> str:
     assets_dir = os.path.join(workdir, "assets")
     os.makedirs(assets_dir, exist_ok=True)
